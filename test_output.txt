@@ -1,0 +1,39 @@
+This version of µWS is not compatible with your Node.js build:
+
+Error: Cannot find module '../binaries/uws_win32_x64_127.node'
+Require stack:
+- C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\ganache\node_modules\@trufflesuite\uws-js-unofficial\src\uws.js
+- C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\ganache\dist\node\core.js
+- C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\truffle\build\test.bundled.js
+- C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\original-require\index.js
+- C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\truffle\build\cli.bundled.js
+Falling back to a NodeJS implementation; performance may be degraded.
+
+
+
+Compiling your contracts...
+===========================
+- Fetching solc version list from solc-bin. Attempt #1
+- Fetching solc version list from solc-bin. Attempt #1
+- Fetching solc version list from solc-bin. Attempt #1
+- Downloading compiler. Attempt #1.
+- Fetching solc version list from solc-bin. Attempt #1
+- Downloading compiler. Attempt #1.
+> Everything is up to date, there is nothing to compile.
+C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\truffle\build\3077.bundled.js:4469
+        throw new Error("Could not find artifacts for " + import_path + " from any sources");
+        ^
+
+Error: Could not find artifacts for MockUSDC from any sources
+    at Resolver.require (C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\truffle\build\webpack:\packages\resolver\dist\lib\resolver.js:53:1)
+    at Object.require (C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\truffle\build\webpack:\packages\migrate\dist\src\index.js:196:1)
+    at ResolverIntercept.require (C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\truffle\build\webpack:\packages\migrate\dist\src\ResolverIntercept.js:23:1)
+    at C:\Users\hanti\Desktop\Magen-Protocol\migrations\1_deploy_contracts.js:1:28
+    at Script.runInContext (node:vm:149:12)
+    at Object.file (C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\truffle\build\webpack:\packages\require\dist\index.js:90:1)
+    at Migration.<anonymous> (C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\truffle\build\webpack:\packages\migrate\dist\src\Migration.js:78:1)
+    at Generator.next (<anonymous>)
+    at fulfilled (C:\Users\hanti\AppData\Local\npm-cache\_npx\7be3639a7343b447\node_modules\truffle\build\webpack:\packages\migrate\dist\src\Migration.js:28:43)
+    at processTicksAndRejections (node:internal/process/task_queues:105:5)
+Truffle v5.11.5 (core: 5.11.5)
+Node v22.17.1

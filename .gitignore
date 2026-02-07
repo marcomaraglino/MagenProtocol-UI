@@ -1,0 +1,11 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+
+# MacOS junk
+.DS_Store
+
+# We intentionally KEEP /build/contracts so Vercel can read the JSON artifacts
+# /build/contracts 
