@@ -46,12 +46,9 @@ async function loadArtifact(name, address = null) {
         let deployedNetwork = data.networks[netId];
 
         if (!deployedNetwork) {
-            const availableNets = Object.keys(data.networks);
-            if (availableNets.length > 0) {
-                deployedNetwork = data.networks[availableNets[availableNets.length - 1]];
-            } else {
-                return null;
-            }
+            alert(`Contract not found on network ID: ${netId}. Please switch MetaMask to Sepolia (11155111) or your local Ganache.`);
+            statusDiv.innerText = `Incorrect Network (ID: ${netId})`;
+            return null;
         }
         return new web3.eth.Contract(data.abi, deployedNetwork.address);
     } catch (e) {
