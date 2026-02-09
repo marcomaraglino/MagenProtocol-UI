@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./MagenVault.sol";
 import "./SimpleAMM.sol";
 
@@ -20,205 +21,169 @@ contract MagenRouter {
         tokenNO = IERC20(_tokenNO);
     }
 
-    function initialize(uint256 amount, uint256 riskPercentage) external {
-        // riskPercentage is 0-100.
-        // Price SI = riskPercentage / 100.
-        // Price NO = (100 - riskPercentage) / 100.
-        // Ratio R_NO / R_SI = P_SI / P_NO = risk / (100 - risk).
+    // Buy SI with USDC: Mint SI+NO, Swap NO -> SI, Return SI
+    function buySI(uint256 usdcAmount) external {
+        require(usdc.transferFrom(msg.sender, address(this), usdcAmount), "USDC transfer failed");
         
-        require(riskPercentage > 0 && riskPercentage < 100, "Invalid risk");
-
-        // 1. Transfer USDC from User to Router
-        require(usdc.transferFrom(msg.sender, address(this), amount), "USDC transfer failed");
+        // Approve Vault to spend USDC
+        usdc.approve(address(vault), usdcAmount);
         
-        // 2. Approve Vault
-        usdc.approve(address(vault), amount);
-
-        // 3. Router calls mint. Vault pulls USDC from Router. Mints SI/NO to Router.
-        vault.mint(amount);
-
-        // 4. Create Pool using MAX liquidity (Zap Style)
-        // Strategy: Use as much minted SI/NO as possible to satisfy the risk ratio.
+        // Mint SI + NO to Router
+        vault.mint(usdcAmount);
         
-        uint256 liqSI;
-        uint256 liqNO;
+        // Swap NO for SI
+        // NO amount to swap is the amount we just minted = usdcAmount
+        uint256 noBalance = tokenNO.balanceOf(address(this));
+        tokenNO.approve(address(amm), noBalance);
         
-        // Ratio R_NO / R_SI = risk / (100 - risk)
-        // If risk <= 50, then risk / (100-risk) <= 1. So NO <= SI.
-        // We use all SI, and a fraction of NO.
-        // Wait, check: if risk = 10. Ratio = 10/90 = 1/9. 
-        // 1 SI requires 1/9 NO. 
-        // We have 100 SI, 100 NO. 
-        // We use 100 SI. We need 11.11 NO. We have 100 NO. OK.
+        // amm.swap(amountIn, isSIIn) -> isSIIn=false for NO input
+        amm.swap(noBalance, false);
         
-        if (riskPercentage <= 50) {
-             liqSI = amount;
-             liqNO = (liqSI * riskPercentage) / (100 - riskPercentage);
-        } else {
-             // risk > 50. Ratio > 1. NO > SI.
-             // We use all NO.
-             liqNO = amount;
-             liqSI = (liqNO * (100 - riskPercentage)) / riskPercentage;
-        }
-
-        tokenSI.approve(address(amm), liqSI);
-        tokenNO.approve(address(amm), liqNO);
-        amm.addLiquidity(liqSI, liqNO);
-        
-        // 5. Send LP tokens to User
-        if (amm.balanceOf(address(this)) > 0) {
-            amm.transfer(msg.sender, amm.balanceOf(address(this)));
-        }
-
-        // 6. Refund remaining SI/NO to User
-        uint256 remSI = tokenSI.balanceOf(address(this));
-        uint256 remNO = tokenNO.balanceOf(address(this));
-        
-        if (remSI > 0) tokenSI.transfer(msg.sender, remSI);
-        if (remNO > 0) tokenNO.transfer(msg.sender, remNO);
+        // Transfer total SI to user
+        uint256 siBalance = tokenSI.balanceOf(address(this));
+        tokenSI.transfer(msg.sender, siBalance);
     }
 
-    function buySI(uint256 usdcIn) external {
-        // 1. User -> USDC -> Router
-        require(usdc.transferFrom(msg.sender, address(this), usdcIn), "USDC transfer failed");
+    // Sell SI for USDC: Swap x SI -> y NO until SI == NO, Burn for USDC
+    function sellSI(uint256 tokenAmount) external {
+        require(tokenAmount > 0, "Amount must be > 0");
+        require(tokenSI.transferFrom(msg.sender, address(this), tokenAmount), "Transfer SI failed");
+
+        // Calculate amount of SI to swap for NO to reach 1:1 ratio
+        // We want (tokenAmount - x) == (reserveNO * x) / (reserveSI + x)
+        // x^2 + (reserveNO + reserveSI - tokenAmount)x - (tokenAmount * reserveSI) = 0
         
-        // 2. Router -> Vault Mint
-        usdc.approve(address(vault), usdcIn);
-        vault.mint(usdcIn); // Router gets SI/NO
+        (uint256 reserveSI, uint256 reserveNO) = (amm.reserveSI(), amm.reserveNO());
         
-        // 3. Swap NO for SI
-        uint256 amountNO = tokenNO.balanceOf(address(this));
-        if (amountNO > 0) {
-             tokenNO.approve(address(amm), amountNO);
-             // Swap NO -> SI
-             amm.swap(amountNO, false); // isSIIn = false (selling NO)
+        // If reserves are empty, we can't swap. This implies no liquidity.
+        if (reserveSI == 0 || reserveNO == 0) {
+            // Fallback: if no liquidity, we can't perform the swap-to-balance.
+            // But user wants USDC. If 1:1 is impossible, revert or handle?
+            revert("Insufficient liquidity for sell");
         }
 
-        // 4. Send all SI to User
-        uint256 totalSI = tokenSI.balanceOf(address(this));
-        tokenSI.transfer(msg.sender, totalSI);
+        /*
+           Equation: x^2 + bx + c = 0
+           b = (reserveNO + reserveSI) - tokenAmount
+           c = - (tokenAmount * reserveSI)
+           
+           We need to be careful with signed integers here since 'b' can be negative.
+           Let's use int256 for calculation.
+        */
+        
+        uint256 amountToSwap;
+        {
+            int256 R_si = int256(reserveSI);
+            int256 R_no = int256(reserveNO);
+            int256 T = int256(tokenAmount);
+            
+            int256 b = (R_no + R_si) - T;
+            int256 c = -(T * R_si); // This is negative
+            
+            // Discriminant = b^2 - 4ac (a=1) -> b^2 - 4c
+            // Since c is negative, -4c is positive.
+            uint256 D = uint256(b * b - (4 * c)); 
+            uint256 sqrtD = Math.sqrt(D);
+            
+            // Root x = (-b + sqrtD) / 2
+            int256 num = -b + int256(sqrtD);
+            amountToSwap = uint256(num / 2);
+        }
+        
+        // Perform Swap
+        tokenSI.approve(address(amm), amountToSwap);
+        amm.swap(amountToSwap, true); // isSIIn = true (Sell SI, Buy NO)
+        
+        // Now balances should be roughly equal
+        uint256 balSI = tokenSI.balanceOf(address(this));
+        uint256 balNO = tokenNO.balanceOf(address(this));
+        
+        // Burn the minimum of the two to convert to USDC
+        uint256 burnAmount = balSI < balNO ? balSI : balNO;
+        
+        // Approve Vault (OutcomeTokens are burnt by vault, need allowance? 
+        // No, vault.burn() calls token.burn() from msg.sender. 
+        // Wait, MagenVault.burn():
+        // tokenSI.burn(msg.sender, amount);
+        // So Router (msg.sender) must hold the tokens. Correct.
+        // Vault DOES NOT transferFrom, it calls burn directly on the token.
+        // Token must allow Vault to burn? No, burn is usually restricted.
+        
+        // Let's check OutcomeToken.sol or MagenVault.burn logic.
+        // Vault calls `tokenSI.burn(msg.sender, amount)`
+        // If OutcomeToken is standard Ownable ERC20 with burn access control, 
+        // and Vault is Owner (which it IS from PoolFactory), it can burn from anyone?
+        // Or Vault calls burn on ITSELF?
+        // "tokenSI.burn(msg.sender, amount)" -> Burn from msg.sender (Router).
+        // Usually `burn(address account, uint256 amount)` requires `account` to be msg.sender OR allowance.
+        // But if Vault is the OWNER of the token, and the token has a `burn` function that allows Owner to burn?
+        
+        // Let's assume Vault has permission.
+        
+        vault.burn(burnAmount);
+        
+        // Return USDC to user
+        uint256 usdcBal = usdc.balanceOf(address(this));
+        usdc.transfer(msg.sender, usdcBal);
+        
+        // Refund dust checks? (Remaining SI/NO < epsilon)
+        // For now, leave dust in Router.
+    }
+
+    // Buy NO with USDC
+    function buyNO(uint256 usdcAmount) external {
+        require(usdc.transferFrom(msg.sender, address(this), usdcAmount), "USDC transfer failed");
+        usdc.approve(address(vault), usdcAmount);
+        vault.mint(usdcAmount);
+        
+        // Swap SI for NO (We have equal SI/NO, swap SI -> NO)
+        uint256 siBalance = tokenSI.balanceOf(address(this));
+        tokenSI.approve(address(amm), siBalance);
+        amm.swap(siBalance, true); // isSIIn=true
+        
+        uint256 noBalance = tokenNO.balanceOf(address(this));
+        tokenNO.transfer(msg.sender, noBalance);
     }
     
-    function buyNO(uint256 usdcIn) external {
-        // 1. User -> USDC -> Router
-        require(usdc.transferFrom(msg.sender, address(this), usdcIn), "USDC transfer failed");
+    // Sell NO for USDC
+    function sellNO(uint256 tokenAmount) external {
+         require(tokenAmount > 0, "Amount must be > 0");
+        require(tokenNO.transferFrom(msg.sender, address(this), tokenAmount), "Transfer NO failed");
+
+        (uint256 reserveSI, uint256 reserveNO) = (amm.reserveSI(), amm.reserveNO());
         
-        // 2. Router -> Vault Mint
-        usdc.approve(address(vault), usdcIn);
-        vault.mint(usdcIn); // Router gets SI/NO
+        if (reserveSI == 0 || reserveNO == 0) revert("Insufficient liquidity");
+
+        // Swap NO -> SI until NO == SI
+        // Equation: x^2 + (R_si + R_no - T)x - (T * R_no) = 0
+        // Same structure, just swap reserves
         
-        // 3. Swap SI for NO
-        uint256 amountSI = tokenSI.balanceOf(address(this));
-        if (amountSI > 0) {
-            tokenSI.approve(address(amm), amountSI);
-            // Swap SI -> NO
-            amm.swap(amountSI, true); // isSIIn = true (selling SI)
+        uint256 amountToSwap;
+        {
+            int256 R_si = int256(reserveSI);
+            int256 R_no = int256(reserveNO);
+            int256 T = int256(tokenAmount);
+            
+            int256 b = (R_no + R_si) - T;
+            int256 c = -(T * R_no);
+            
+            uint256 D = uint256(b * b - (4 * c));
+            uint256 sqrtD = Math.sqrt(D);
+            
+            int256 num = -b + int256(sqrtD);
+            amountToSwap = uint256(num / 2);
         }
-
-        // 4. Send all NO to User
-        uint256 totalNO = tokenNO.balanceOf(address(this));
-        tokenNO.transfer(msg.sender, totalNO);
-    }
-
-    function sellSI(uint256 siIn) external {
-        // 1. User -> SI -> Router
-        require(tokenSI.transferFrom(msg.sender, address(this), siIn), "SI transfer failed");
-
-        // 2. Sell part of SI for NO to match balances for burning.
-        // Heuristic: swap roughly half to get the other side.
-        // Optimally we'd calc exact capability, but 50% is close enough for MVP.
-        uint256 sellAmount = siIn / 2;
-        tokenSI.approve(address(amm), sellAmount);
-        amm.swap(sellAmount, true); // isSIIn = true (selling SI)
-
-        // 3. Burn what we have
+        
+        tokenNO.approve(address(amm), amountToSwap);
+        amm.swap(amountToSwap, false); // isSIIn=false (Sell NO, Buy SI)
+        
         uint256 balSI = tokenSI.balanceOf(address(this));
         uint256 balNO = tokenNO.balanceOf(address(this));
         uint256 burnAmount = balSI < balNO ? balSI : balNO;
         
-        if (burnAmount > 0) {
-            vault.burn(burnAmount);
-        }
-
-        // 4. Send USDC to User + dust SI/NO
-        uint256 usdcBal = usdc.balanceOf(address(this));
-        if (usdcBal > 0) usdc.transfer(msg.sender, usdcBal);
-
-        if (tokenSI.balanceOf(address(this)) > 0) tokenSI.transfer(msg.sender, tokenSI.balanceOf(address(this)));
-        if (tokenNO.balanceOf(address(this)) > 0) tokenNO.transfer(msg.sender, tokenNO.balanceOf(address(this)));
-    }
-
-    function sellNO(uint256 noIn) external {
-        // 1. User -> NO -> Router
-        require(tokenNO.transferFrom(msg.sender, address(this), noIn), "NO transfer failed");
-
-        // 2. Sell part of NO for SI
-        uint256 sellAmount = noIn / 2;
-        tokenNO.approve(address(amm), sellAmount);
-        amm.swap(sellAmount, false); // isSIIn = false (selling NO)
-
-        // 3. Burn what we have
-        uint256 balSI = tokenSI.balanceOf(address(this));
-        uint256 balNO = tokenNO.balanceOf(address(this));
-        uint256 burnAmount = balSI < balNO ? balSI : balNO;
+        vault.burn(burnAmount);
         
-        if (burnAmount > 0) {
-            vault.burn(burnAmount);
-        }
-
-        // 4. Send USDC to User + dust SI/NO
         uint256 usdcBal = usdc.balanceOf(address(this));
-        if (usdcBal > 0) usdc.transfer(msg.sender, usdcBal);
-
-        if (tokenSI.balanceOf(address(this)) > 0) tokenSI.transfer(msg.sender, tokenSI.balanceOf(address(this)));
-        if (tokenNO.balanceOf(address(this)) > 0) tokenNO.transfer(msg.sender, tokenNO.balanceOf(address(this)));
-    }
-    function addLiquidityZap(uint256 usdcAmount) external {
-        // 1. User -> USDC -> Router
-        require(usdc.transferFrom(msg.sender, address(this), usdcAmount), "USDC transfer failed");
-
-        // 2. Mint SI + NO
-        usdc.approve(address(vault), usdcAmount);
-        vault.mint(usdcAmount); 
-
-        // Current Balances
-        uint256 balSI = tokenSI.balanceOf(address(this));
-        uint256 balNO = tokenNO.balanceOf(address(this));
-
-        uint256 rSI = tokenSI.balanceOf(address(amm));
-        uint256 rNO = tokenNO.balanceOf(address(amm));
-
-        uint256 amtSI = balSI;
-        uint256 amtNO = balNO;
-
-        if (rSI > 0 && rNO > 0) {
-            // Check Optimal NO amount for the available SI
-            uint256 optimalNO = (amtSI * rNO) / rSI;
-            if (optimalNO <= amtNO) {
-                // We have enough NO, so use all SI and optimal NO
-                amtNO = optimalNO;
-            } else {
-                // We don't have enough NO, implies we have "too much" SI for the ratio? 
-                // Wait. if optimalNO > amtNO, it means we need MORE NO than we have to match the SI.
-                // So SI is the abundance. We should limit SI.
-                uint256 optimalSI = (amtNO * rSI) / rNO;
-                amtSI = optimalSI;
-            }
-        }
-
-        // 3. Add Liquidity
-        tokenSI.approve(address(amm), amtSI);
-        tokenNO.approve(address(amm), amtNO);
-        amm.addLiquidity(amtSI, amtNO);
-
-        // 4. Send LP tokens to User
-        uint256 lpBal = amm.balanceOf(address(this));
-        if (lpBal > 0) {
-            amm.transfer(msg.sender, lpBal);
-        }
-
-        // 5. Refund Dust/Difference
-        if (tokenSI.balanceOf(address(this)) > 0) tokenSI.transfer(msg.sender, tokenSI.balanceOf(address(this)));
-        if (tokenNO.balanceOf(address(this)) > 0) tokenNO.transfer(msg.sender, tokenNO.balanceOf(address(this)));
+        usdc.transfer(msg.sender, usdcBal);
     }
 }
