@@ -181,6 +181,94 @@ contract MagenRouter {
         if (dustNO > 0) tokenNO.transfer(msg.sender, dustNO);
     }
 
+    // Buy SI: Mint SI+NO, Sell NO -> SI, Return Total SI
+    function buySI(uint256 usdcAmount) external {
+        require(usdc.transferFrom(msg.sender, address(this), usdcAmount), "USDC transfer failed");
+        
+        usdc.approve(address(vault), usdcAmount);
+        vault.mint(usdcAmount);
+        
+        uint256 noBalance = tokenNO.balanceOf(address(this));
+        tokenNO.approve(address(uniswapRouter), noBalance);
+        
+        // Path: NO -> SI
+        address[] memory path = new address[](2);
+        path[0] = address(tokenNO);
+        path[1] = address(tokenSI);
+        
+        uniswapRouter.swapExactTokensForTokens(
+            noBalance,
+            0, // amountOutMin
+            path,
+            address(this), // Router receives SI first
+            block.timestamp + 300
+        );
+        
+        // Send all SI to user
+        uint256 siBalance = tokenSI.balanceOf(address(this));
+        tokenSI.transfer(msg.sender, siBalance);
+    }
+
+    // Sell SI: Best effort swap SI -> NO to balance, then Burn
+    function sellSI(uint256 tokenAmount) external {
+        require(tokenAmount > 0, "Amount > 0");
+        require(tokenSI.transferFrom(msg.sender, address(this), tokenAmount), "Transfer failed");
+
+        // Get Reserves
+        (uint112 _reserve0, uint112 _reserve1,) = IUniswapV2Pair(pair).getReserves();
+        address _token0 = IUniswapV2Pair(pair).token0();
+        
+        (uint256 reserveSI, uint256 reserveNO) = (address(tokenSI) == _token0) 
+            ? (_reserve0, _reserve1) 
+            : (_reserve1, _reserve0);
+            
+        // Quadratic Formula for Optimal Swap Amount
+        // x = (-b + sqrt(b^2 - 4ac)) / 2
+        // b = (R_no + R_si) - T
+        // c = -(T * R_si)
+        
+        uint256 amountToSwap;
+        {
+            int256 R_si = int256(reserveSI);
+            int256 R_no = int256(reserveNO);
+            int256 T = int256(tokenAmount);
+            
+            int256 b = (R_no + R_si) - T;
+            int256 c = -(T * R_si);
+            
+            uint256 D = uint256(b * b - (4 * c));
+            uint256 sqrtD = Math.sqrt(D);
+            
+            // Result is positive, safe to cast
+            int256 num = -b + int256(sqrtD);
+            amountToSwap = uint256(num / 2);
+        }
+
+        tokenSI.approve(address(uniswapRouter), amountToSwap);
+        
+        address[] memory path = new address[](2);
+        path[0] = address(tokenSI);
+        path[1] = address(tokenNO);
+
+        uniswapRouter.swapExactTokensForTokens(
+            amountToSwap,
+            0, // Accept any amount for now (MVP)
+            path,
+            address(this),
+            block.timestamp + 300
+        );
+
+        uint256 balSI = tokenSI.balanceOf(address(this));
+        uint256 balNO = tokenNO.balanceOf(address(this));
+        uint256 burnAmount = balSI < balNO ? balSI : balNO;
+
+        vault.burn(burnAmount);
+
+        // Return USDC
+        uint256 usdcBal = usdc.balanceOf(address(this));
+        usdc.transfer(msg.sender, usdcBal);
+    }
+
     // Fallback for buyNO
     function buyNO(uint256 usdcAmount) external {
         require(usdc.transferFrom(msg.sender, address(this), usdcAmount), "USDC transfer failed");
@@ -204,5 +292,73 @@ contract MagenRouter {
         
         uint256 noBalance = tokenNO.balanceOf(address(this));
         tokenNO.transfer(msg.sender, noBalance);
+    }
+
+    function sellNO(uint256 tokenAmount) external {
+        require(tokenAmount > 0, "Amount > 0");
+        require(tokenNO.transferFrom(msg.sender, address(this), tokenAmount), "Transfer failed");
+
+        // Get Reserves
+        (uint112 _reserve0, uint112 _reserve1,) = IUniswapV2Pair(pair).getReserves();
+        address _token0 = IUniswapV2Pair(pair).token0();
+        
+        // Identify reserve order relative to our tokens
+        (uint256 reserveSI, uint256 reserveNO) = (address(tokenSI) == _token0) 
+            ? (_reserve0, _reserve1) 
+            : (_reserve1, _reserve0);
+
+        // We have `tokenAmount` of NO. We want `Final_SI == Final_NO`.
+        // We swap NO -> SI.
+        // Target: (Initial_NO - x) = GetAmountOut(NO->SI, x)
+        // Same quadratic formula structure:
+        // x^2 + (ResOut + ResIn - A)x - A*ResIn = 0
+        // Here Input is NO (ResIn = reserveNO), Output is SI (ResOut = reserveSI).
+        // A = tokenAmount.
+        
+        uint256 amountToSwap;
+        {
+            int256 R_in = int256(reserveNO);
+            int256 R_out = int256(reserveSI);
+            int256 T = int256(tokenAmount);
+            
+            int256 b = (R_out + R_in) - T;
+            int256 c = -(T * R_in);
+            
+            uint256 D = uint256(b * b - (4 * c));
+            uint256 sqrtD = Math.sqrt(D);
+            
+            int256 num = -b + int256(sqrtD);
+            amountToSwap = uint256(num / 2);
+        }
+        
+        if (amountToSwap > 0) {
+            tokenNO.approve(address(uniswapRouter), amountToSwap);
+            
+            address[] memory path = new address[](2);
+            path[0] = address(tokenNO);
+            path[1] = address(tokenSI);
+    
+            uniswapRouter.swapExactTokensForTokens(
+                amountToSwap,
+                0, // Accept any amount for now (MVP)
+                path,
+                address(this),
+                block.timestamp + 300
+            );
+        }
+
+        uint256 balSI = tokenSI.balanceOf(address(this));
+        uint256 balNO = tokenNO.balanceOf(address(this));
+        uint256 burnAmount = balSI < balNO ? balSI : balNO;
+        
+        if (burnAmount > 0) {
+            vault.burn(burnAmount);
+            
+            // Return USDC
+            uint256 usdcBal = usdc.balanceOf(address(this));
+            if (usdcBal > 0) {
+                usdc.transfer(msg.sender, usdcBal);
+            }
+        }
     }
 }
