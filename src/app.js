@@ -90,6 +90,23 @@ async function init() {
                 window.location.reload();
             });
 
+            // Slider Listeners
+            const riskSlider = document.getElementById('newPoolRisk');
+            const riskDisplay = document.getElementById('newPoolRiskDisplay');
+            if (riskSlider && riskDisplay) {
+                riskSlider.addEventListener('input', (e) => {
+                    riskDisplay.innerText = `${e.target.value}%`;
+                });
+            }
+
+            const initRiskSlider = document.getElementById('initRisk');
+            const initRiskDisplay = document.getElementById('initRiskDisplay');
+            if (initRiskSlider && initRiskDisplay) {
+                initRiskSlider.addEventListener('input', (e) => {
+                    initRiskDisplay.innerText = `${e.target.value}%`;
+                });
+            }
+
         } catch (error) {
             console.error(error);
             statusDiv.innerText = "Connection Failed";

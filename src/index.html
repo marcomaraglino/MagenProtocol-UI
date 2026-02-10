@@ -54,9 +54,12 @@
                 <h3 style="font-size: 1rem; color: var(--text-muted); margin: 20px 0 10px;">Initialization Parameters
                 </h3>
 
-                <div class="input-group">
-                    <input type="number" id="newPoolRisk" placeholder="Risk Assignment % (e.g. 5)">
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <label for="newPoolRisk" style="color: var(--text-muted); font-size: 0.9rem;">Risk Assignment
+                        %</label>
+                    <span id="newPoolRiskDisplay" style="color: var(--primary); font-weight: bold;">5%</span>
                 </div>
+                <input type="range" id="newPoolRisk" min="0" max="99" value="5" style="width: 100%; margin-top: 5px;">
 
                 <div class="input-group">
                     <input type="number" id="newPoolLiquidity" placeholder="Initial USDC Liquidity">
@@ -254,8 +257,12 @@
                         <h3 style="font-size: 1rem; color: var(--text-muted); margin: 15px 0 10px;">Initialization</h3>
                         <input type="number" id="initAmount" placeholder="Init USDC Amount"
                             style="background: rgba(255,255,255,0.05); border: none; padding: 10px; color: white; width: 100%; border-radius: 6px; margin-bottom: 5px;">
-                        <input type="number" id="initRisk" placeholder="Risk % (e.g. 5)"
-                            style="background: rgba(255,255,255,0.05); border: none; padding: 10px; color: white; width: 100%; border-radius: 6px; margin-bottom: 10px;">
+                        <div style="display: flex; align-items: center; justify-content: space-between;">
+                            <label for="initRisk" style="color: var(--text-muted); font-size: 0.9rem;">Risk %</label>
+                            <span id="initRiskDisplay" style="color: var(--primary); font-weight: bold;">5%</span>
+                        </div>
+                        <input type="range" id="initRisk" min="0" max="99" value="5"
+                            style="width: 100%; margin-bottom: 10px;">
                         <button class="action-btn btn-secondary" onclick="initPool()">Initialize Pool</button>
                     </div>
 
