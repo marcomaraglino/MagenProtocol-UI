@@ -103,6 +103,14 @@
                                 <div class="pool-stat-value">N/A</div>
                             </div>
                         </div>
+                        <div class="pool-info"
+                            style="margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 15px;">
+                            <div style="width: 100%;">
+                                <div class="pool-stat-label">Pool Composition</div>
+                                <div class="pool-stat-value" id="poolComp"
+                                    style="font-size: 0.9rem; color: var(--accent);">Loading...</div>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="glass-card" style="margin-top: 30px;">
@@ -195,7 +203,7 @@
                                     </div>
 
                                     <button class="action-btn btn-primary" style="margin-top: 15px;"
-                                        onclick="handleLiqAddZap()">Add Liquidity (Zap)</button>
+                                        onclick="handleLiqAddZap()">Add Liquidity</button>
                                 </div>
 
                                 <!-- REMOVE LIQUIDITY -->
@@ -217,9 +225,6 @@
                                     <button class="action-btn btn-secondary" onclick="handleLiqRemove()">Remove
                                         Liquidity (Receive SI + NO)</button>
 
-                                    <button class="action-btn btn-primary"
-                                        style="margin-top: 10px; background: rgba(56, 189, 248, 0.2);"
-                                        onclick="handleLiqRemoveZap()">Zap Out (LP &rarr; USDC)</button>
                                 </div>
 
                             </div>

@@ -411,21 +411,22 @@ async function handleSecondaryAction() {
 async function handleLiqAddZap() {
     const amt = document.getElementById('addLiquidityUSDC').value;
     if (!amt) return;
-    statusDiv.innerText = "Zap Liquidity...";
+    statusDiv.innerText = "Adding Liquidity...";
     try {
         const wei = web3.utils.toWei(amt, 'ether');
         // 1. Approve USDC to Router
         statusDiv.innerText = "Approving USDC...";
         await mockUSDC.methods.approve(magenRouter.options.address, wei).send({ from: accounts[0] });
 
-        // 2. Add Liquidity Zap
-        statusDiv.innerText = "Adding Liquidity (Zap)...";
-        await magenRouter.methods.addLiquidityZap(wei).send({ from: accounts[0] });
+        // 2. Add Liquidity (Smart)
+        statusDiv.innerText = "Adding Liquidity...";
+        await magenRouter.methods.addLiquidity(wei).send({ from: accounts[0] });
 
-        statusDiv.innerText = "Liquidity Added (Zap Success)!";
+        statusDiv.innerText = "Liquidity Added!";
         updateStats();
-    } catch (e) { statusDiv.innerText = "Zap Failed: " + e.message; }
+    } catch (e) { statusDiv.innerText = "Add Liq Failed: " + e.message; }
 }
+
 
 async function handleLiqRemove() {
     const lp = document.getElementById('removeLP').value;
@@ -469,35 +470,7 @@ async function handleLiqRemove() {
     } catch (e) { statusDiv.innerText = "Remove LP Failed: " + e.message; }
 }
 
-async function handleLiqRemoveZap() {
-    const lp = document.getElementById('removeLP').value;
-    if (!lp) return;
 
-    statusDiv.innerText = "Zapping Out LP...";
-    try {
-        const weiLP = web3.utils.toWei(lp, 'ether');
-
-        // Check Balance
-        const bal = await uniswapPair.methods.balanceOf(accounts[0]).call();
-        if (web3.utils.toBN(bal).lt(web3.utils.toBN(weiLP))) {
-            throw new Error("Insufficient LP Balance");
-        }
-
-        // Approve Router (MagenRouter) to spend LP
-        // The MagenRouter needs to pull LP tokens to burn them
-        // Wait, removeLiquidityZap in Router calls transferFrom(msg.sender, this, lpAmount)
-        // So we need to approve MagenRouter, NOT UniswapRouter directly for this Zap.
-
-        statusDiv.innerText = "Approving LP to MagenRouter...";
-        await uniswapPair.methods.approve(magenRouter.options.address, weiLP).send({ from: accounts[0] });
-
-        statusDiv.innerText = "Zapping LP to USDC...";
-        await magenRouter.methods.removeLiquidityZap(weiLP).send({ from: accounts[0] });
-
-        statusDiv.innerText = "Zap Out Successful! Received USDC.";
-        updateStats();
-    } catch (e) { statusDiv.innerText = "Zap Out Failed: " + e.message; }
-}
 
 async function setMaxLP() {
     if (!uniswapPair) return;
@@ -531,6 +504,9 @@ async function updateStats() {
 
         const elTVL = document.getElementById('statTVL');
         if (elTVL) elTVL.innerText = `$${tvlUSDC.toFixed(2)}`;
+
+        const elComp = document.getElementById('poolComp');
+        if (elComp) elComp.innerText = `${rSI.toFixed(2)} SI / ${rNO.toFixed(2)} NO`;
 
         // Balances
         if (accounts) {
