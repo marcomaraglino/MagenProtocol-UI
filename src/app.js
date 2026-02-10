@@ -2,7 +2,7 @@ const statusDiv = document.getElementById('status');
 let web3;
 let accounts;
 let poolFactory;
-let mockUSDC, magenRouter, magenVault, outcomeSI, outcomeNO, simpleAMM;
+let mockUSDC, magenRouter, magenVault, outcomeSI, outcomeNO, uniswapPair;
 let contracts = {};
 
 // Chart Instance
@@ -134,7 +134,7 @@ async function loadMarkets() {
                     <p style="color: var(--text-muted); font-size: 0.9em; margin: 0;">Status: Active</p>
                 </div>
                 <button class="action-btn btn-primary" style="width: auto; padding: 8px 16px;" 
-                    onclick="openPool('${pool.router}', '${pool.vault}', '${pool.amm}', '${pool.name}')">
+                    onclick="openPool('${pool.router}', '${pool.vault}', '${pool.pair}', '${pool.name}')">
                     View Pool
                 </button>
             `;
@@ -205,13 +205,14 @@ async function createPool() {
     }
 }
 
-async function openPool(routerAddr, vaultAddr, ammAddr, name) {
+async function openPool(routerAddr, vaultAddr, pairAddr, name) {
     document.getElementById('poolTitle').innerText = name;
 
     // Load Contracts for specific pool
+    // Load Contracts for specific pool
     magenRouter = await loadArtifact("MagenRouter", routerAddr);
     magenVault = await loadArtifact("MagenVault", vaultAddr);
-    simpleAMM = await loadArtifact("SimpleAMM", ammAddr);
+    uniswapPair = await loadArtifact("IUniswapV2Pair", pairAddr);
 
     // Load Tokens
     if (magenVault) {
@@ -431,20 +432,42 @@ async function handleLiqRemove() {
         const weiLP = web3.utils.toWei(lp, 'ether');
 
         // Check Balance
-        const bal = await simpleAMM.methods.balanceOf(accounts[0]).call();
+        const bal = await uniswapPair.methods.balanceOf(accounts[0]).call();
         if (web3.utils.toBN(bal).lt(web3.utils.toBN(weiLP))) {
             throw new Error("Insufficient LP Balance");
         }
 
-        await simpleAMM.methods.removeLiquidity(weiLP).send({ from: accounts[0] });
+        // Get Uniswap Router Address
+        const routerAddr = await magenRouter.methods.uniswapRouter().call();
+        const uniRouter = await loadArtifact("IUniswapV2Router02", routerAddr);
+
+        // Approve Router to spend LP
+        statusDiv.innerText = "Approving LP...";
+        await uniswapPair.methods.approve(routerAddr, weiLP).send({ from: accounts[0] });
+
+        statusDiv.innerText = "Removing Liquidity (Uniswap)...";
+
+        // Remove Liquidity
+        // min amounts 0 for MVP
+        const deadline = Math.floor(Date.now() / 1000) + 300;
+        await uniRouter.methods.removeLiquidity(
+            outcomeSI.options.address,
+            outcomeNO.options.address,
+            weiLP,
+            0,
+            0,
+            accounts[0],
+            deadline
+        ).send({ from: accounts[0] });
+
         statusDiv.innerText = "Liquidity Removed! (Received SI + NO)";
         updateStats();
     } catch (e) { statusDiv.innerText = "Remove LP Failed: " + e.message; }
 }
 
 async function setMaxLP() {
-    if (!simpleAMM) return;
-    const bal = await simpleAMM.methods.balanceOf(accounts[0]).call();
+    if (!uniswapPair) return;
+    const bal = await uniswapPair.methods.balanceOf(accounts[0]).call();
     const balFmt = web3.utils.fromWei(bal, 'ether');
     document.getElementById('removeLP').value = balFmt;
 }
@@ -452,15 +475,23 @@ async function setMaxLP() {
 // ---------------------------
 
 async function updateStats() {
-    if (!simpleAMM || !web3) return;
+    if (!uniswapPair || !web3) return;
 
     try {
-        const resSI = await simpleAMM.methods.reserveSI().call();
-        const resNO = await simpleAMM.methods.reserveNO().call();
-        const rSI = parseFloat(web3.utils.fromWei(resSI, 'ether'));
-        const rNO = parseFloat(web3.utils.fromWei(resNO, 'ether'));
+        // Get Reserves from Uniswap Pair
+        const reserves = await uniswapPair.methods.getReserves().call();
+        const token0 = await uniswapPair.methods.token0().call();
+        const tokenSIAddr = outcomeSI.options.address;
 
-        // TOTAL LIQUIDITY
+        // Identify which reserve is SI
+        const isToken0SI = (token0.toLowerCase() === tokenSIAddr.toLowerCase());
+        const rawResSI = isToken0SI ? reserves[0] : reserves[1];
+        const rawResNO = isToken0SI ? reserves[1] : reserves[0];
+
+        const rSI = parseFloat(web3.utils.fromWei(rawResSI, 'ether'));
+        const rNO = parseFloat(web3.utils.fromWei(rawResNO, 'ether'));
+
+        // TOTAL LIQUIDITY (USDC in Vault) - still valid metric for Magen Protocol
         const vaultUSDC = await mockUSDC.methods.balanceOf(magenVault.options.address).call();
         const tvlUSDC = parseFloat(web3.utils.fromWei(vaultUSDC, 'ether'));
 
@@ -469,7 +500,7 @@ async function updateStats() {
 
         // Balances
         if (accounts) {
-            const lpBal = await simpleAMM.methods.balanceOf(accounts[0]).call();
+            const lpBal = await uniswapPair.methods.balanceOf(accounts[0]).call();
             const lpBalFmt = parseFloat(web3.utils.fromWei(lpBal, 'ether')).toFixed(2);
             if (document.getElementById('displayLPBal')) document.getElementById('displayLPBal').innerText = lpBalFmt;
 
@@ -501,7 +532,7 @@ async function updateStats() {
                          <span style="color: var(--primary);">Bal: ${noBalFmt}</span>
                     </div>
                     <div style="margin-bottom: 8px;">
-                         <strong>LP Token:</strong> ${shortAddr(simpleAMM.options.address)} <br>
+                         <strong>LP Token (Uni V2):</strong> ${shortAddr(uniswapPair.options.address)} <br>
                          <span style="color: var(--primary);">Bal: ${lpBalFmt}</span>
                     </div>
                 `;
